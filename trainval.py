@@ -11,7 +11,7 @@ from src.processor import processor
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(0)
-
+# torch.autograd.set_detect_anomaly(True)
 
 def get_parser():
     parser = argparse.ArgumentParser(

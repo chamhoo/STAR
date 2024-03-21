@@ -5,18 +5,18 @@ from .star import STAR
 from .utils import *
 
 from tqdm import tqdm
+# torch.autograd.set_detect_anomaly(True)
 
 
 class processor(object):
     def __init__(self, args):
-
+        # initialization
         self.args = args
-
         self.dataloader = Trajectory_Dataloader(args)
         self.net = STAR(args)
-
         self.set_optimizer()
-
+        
+        # if cuda
         if self.args.using_cuda:
             self.net = self.net.cuda()
         else:
@@ -71,6 +71,7 @@ class processor(object):
         print('Set: {}, epoch: {},test_error: {} test_final_error: {}'.format(self.args.test_set,
                                                                                           self.args.load_model,
                                                                                        test_error, test_final_error))
+        
     def train(self):
 
         print('Training begin')
@@ -119,8 +120,7 @@ class processor(object):
 
             loss = torch.zeros(1).cuda()
             batch_abs, batch_norm, shift_value, seq_list, nei_list, nei_num, batch_pednum = inputs
-            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], nei_list[:-1], nei_num[
-                                                                                                              :-1], batch_pednum
+            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], nei_list[:-1], nei_num[:-1], batch_pednum
 
             self.net.zero_grad()
 
@@ -129,8 +129,8 @@ class processor(object):
             lossmask, num = getLossMask(outputs, seq_list[0], seq_list[1:], using_cuda=self.args.using_cuda)
             loss_o = torch.sum(self.criterion(outputs, batch_norm[1:, :, :2]), dim=2)
 
-            loss += (torch.sum(loss_o * lossmask / num))
-            loss_epoch += loss.item()
+            loss = loss + (torch.sum(loss_o * lossmask / num))
+            loss_epoch = loss_epoch + loss.item()
 
             loss.backward()
 

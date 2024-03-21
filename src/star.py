@@ -6,13 +6,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .multi_attention_forward import multi_head_attention_forward
-
+# torch.autograd.set_detect_anomaly(True)
 
 def get_noise(shape, noise_type):
     if noise_type == "gaussian":
         return torch.randn(shape).cuda()
     elif noise_type == "uniform":
-        return torch.rand(*shape).sub_(0.5).mul_(2.0).cuda()
+        return torch.rand(*shape).sub(0.5).mul(2.0).cuda()
     raise ValueError('Unrecognized noise type "%s"' % noise_type)
 
 
@@ -241,6 +241,7 @@ class TransformerEncoder(nn.Module):
         self.norm = norm
 
     def forward(self, src, mask=None, src_key_padding_mask=None):
+        # input of temporal_encoder_1 [T, N of Ped, 32-Embedded coorinate]
         r"""Pass the input through the encoder layers in turn.
 
         Args:
@@ -276,10 +277,17 @@ class TransformerModel(nn.Module):
         self.ninp = ninp
 
     def forward(self, src, mask):
+        # input of spatial_encoder2 [N of Ped, 1, Embedded Feature]
+        # The first masked_fill sets positions with zeros in n_mask to a very large negative value (-1e20). 
+        # In the context of the softmax operation within the attention mechanism, 
+        # these large negative values will become zeros, 
+        # effectively blocking attention to these positions.
+        # 
+        # The second masked_fill ensures positions with ones in n_mask remain unchanged, 
+        # allowing attention to these positions.
         n_mask = mask + torch.eye(mask.shape[0], mask.shape[0]).cuda()
         n_mask = n_mask.float().masked_fill(n_mask == 0., float(-1e20)).masked_fill(n_mask == 1., float(0.0))
         output = self.transformer_encoder(src, mask=n_mask)
-
         return output
 
 
@@ -402,15 +410,20 @@ class STAR(torch.nn.Module):
         return node_abs.permute(1, 0, 2)
 
     def forward(self, inputs, iftest=False):
-
+        # Unpack inputs tuple into respective variables
         nodes_abs, nodes_norm, shift_value, seq_list, nei_lists, nei_num, batch_pednum = inputs
         num_Ped = nodes_norm.shape[1]
-
+        # initializing outputs and GM
+        # bs: 19 as default
+        # outputs  [bs, num of ped, 2]
+        # GM       [bs, num of ped, 32 (embedding size)]
         outputs = torch.zeros(nodes_norm.shape[0], num_Ped, 2).cuda()
         GM = torch.zeros(nodes_norm.shape[0], num_Ped, 32).cuda()
 
         noise = get_noise((1, 16), 'gaussian')
 
+        # Loop through each frame in the sequence except the last one
+        # T = framenum + 1
         for framenum in range(self.args.seq_length - 1):
 
             if framenum >= self.args.obs_length and iftest:
@@ -440,34 +453,59 @@ class STAR(torch.nn.Module):
                 node_abs = self.mean_normalize_abs_input(nodes_abs[:framenum + 1, node_index], st_ed)
 
             # Input Embedding
-            if framenum == 0:
-                temporal_input_embedded = self.dropout_in(self.relu(self.input_embedding_layer_temporal(nodes_current)))
-            else:
-                temporal_input_embedded = self.dropout_in(self.relu(self.input_embedding_layer_temporal(nodes_current)))
-                temporal_input_embedded[:framenum] = GM[:framenum, node_index]
-
-            spatial_input_embedded_ = self.dropout_in2(self.relu(self.input_embedding_layer_spatial(node_abs)))
-
+            # nodes_current [T, N of Ped, 2-coordinate] 
+            # temporal_input_embedded [T, N of Ped, 32-Embedded coorinate] 
+            emb_layer = self.input_embedding_layer_temporal(nodes_current)
+            temporal_relu = torch.relu(emb_layer)
+            temporal_input_embedded = self.dropout_in(temporal_relu)
+            if framenum != 0:
+                # Concat the input embedding with previous temporal output stored into GM(Graph Memory)  
+                # temporal_input_embedded[:framenum] = GM[:framenum, node_index]
+                # assume that the current seqence t is t=4, 
+                # replace ALL the embedded feature before t by pervious output from temporal-2
+                temporal_input_embedded_clone = temporal_input_embedded.clone()
+                temporal_input_embedded_clone[:framenum] = GM[:framenum, node_index]
+                temporal_input_embedded = temporal_input_embedded_clone
+            # sptial embedding
+            # spatial_input_embedded_ [T, N of Ped, Embedded Feature]
+            emb_layer_spa = self.input_embedding_layer_spatial(node_abs)
+            temporal_input_relu = torch.relu(emb_layer_spa)
+            spatial_input_embedded_ = self.dropout_in2(temporal_input_relu)
+            # spatial transformer
+            # input of spatial_encoder [N of Ped, 1, Embedded Feature]
+            # output of spatial_encoder [N of Ped, 1, Embedded Feature]
             spatial_input_embedded = self.spatial_encoder_1(spatial_input_embedded_[-1].unsqueeze(1), nei_list)
-
+            # spatial_input_embedded [N of Ped, Embedded Feature]
             spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)[-1]
+            # input of temporal_encoder_1 [T, N of Ped, 32-Embedded coorinate]
+            # output of temporal_encoder_1 [N of Ped, Embedded Feature]
             temporal_input_embedded_last = self.temporal_encoder_1(temporal_input_embedded)[-1]
 
             temporal_input_embedded = temporal_input_embedded[:-1]
 
+            # fusion [N of Ped, 2*Embedded Features]
             fusion_feat = torch.cat((temporal_input_embedded_last, spatial_input_embedded), dim=1)
             fusion_feat = self.fusion_layer(fusion_feat)
-
+            # input of spatial_encoder2 [N of Ped, 1, Embedded Feature]
             spatial_input_embedded = self.spatial_encoder_2(fusion_feat.unsqueeze(1), nei_list)
+            # spatial_input_embedded [1, N of Ped, Embedded Feature]
             spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)
-
+            # input of temporal_encoder_2 [(T-1) from GM + 1 from spatial = T, N of Ped, Embedded Features]
             temporal_input_embedded = torch.cat((temporal_input_embedded, spatial_input_embedded), dim=0)
+            # output of temporal_encoder_2 [N of Ped, Embedded Features]
             temporal_input_embedded = self.temporal_encoder_2(temporal_input_embedded)[-1]
-
+            # add noise
             noise_to_cat = noise.repeat(temporal_input_embedded.shape[0], 1)
             temporal_input_embedded_wnoise = torch.cat((temporal_input_embedded, noise_to_cat), dim=1)
             outputs_current = self.output_layer(temporal_input_embedded_wnoise)
-            outputs[framenum, node_index] = outputs_current
-            GM[framenum, node_index] = temporal_input_embedded
-
+            
+            # Update the outputs and GM with the current frame's output
+            outputs_clone = outputs.clone()
+            outputs_clone[framenum, node_index] = outputs_current
+            outputs = outputs_clone
+            # GM[framenum, node_index] = temporal_input_embedded
+            GM_clone = GM.clone()
+            # 然后对GM_clone进行操作
+            GM_clone[framenum, node_index] = temporal_input_embedded
+            GM = GM_clone
         return outputs

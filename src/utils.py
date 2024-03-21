@@ -15,8 +15,9 @@ DATASET_NAME_TO_NUM = {
 
 
 class Trajectory_Dataloader():
-    def __init__(self, args):
 
+    def __init__(self, args):
+        # 根据 args.dataset 选择不同的数据集目录
         self.args = args
         if self.args.dataset == 'eth5':
 
@@ -45,11 +46,14 @@ class Trajectory_Dataloader():
 
             self.train_dir = [self.data_dirs[x] for x in train_set]
             self.test_dir = [self.data_dirs[x] for x in self.test_set]
+
+            # 采样间隔。不是每一帧都被用于分析，而是每隔 skip[x] 帧采样一次
             self.trainskip = [skip[x] for x in train_set]
             self.testskip = [skip[x] for x in self.test_set]
         else:
             raise NotImplementedError
 
+        # 预处理轨迹数据，包括训练集和测试集
         self.train_data_file = os.path.join(self.args.save_dir, "train_trajectories.cpkl")
         self.test_data_file = os.path.join(self.args.save_dir, "test_trajectories.cpkl")
         self.train_batch_cache = os.path.join(self.args.save_dir, "train_batch_cache.cpkl")
@@ -75,7 +79,8 @@ class Trajectory_Dataloader():
 
         print('Total number of training batches:', self.trainbatchnums)
         print('Total number of test batches:', self.testbatchnums)
-
+        
+        # reset ALL frame_pointer/val_frame_pointer/test_frame_pointer into 0
         self.reset_batch_pointer(set='train', valid=False)
         self.reset_batch_pointer(set='train', valid=True)
         self.reset_batch_pointer(set='test', valid=False)
@@ -118,6 +123,24 @@ class Trajectory_Dataloader():
             frameped_dict.append({})
             pedtrajec_dict.append({})
 
+
+            # pedtrajec_dict/pedtraject_dict:
+            # -为每个帧号建立一个包含该帧中所有行人ID的列表。
+            # -这个映射对于后续根据帧号快速索引到所有存在的行人非常有用。
+            # [{dataset1}, {dataset2}, ....]
+            #     \
+            #      --{dict(ID1), dict(ID2), .....dict(ID9)}
+            #             \
+            #              --shape: [# of ids, 3 (frame_N, x, y)]
+
+            # frameped_dict:
+            # 为每个行人ID建立一个其所途径的所有时间帧的list,
+            # [{dataset1}, {dataset2}, ....]
+            #     \
+            #      --{dict(frame1), dict(frame2), dict(frame3), ...}
+            #          \
+            #           -- {frame1: [ID1, ID2, ID3]}
+        
             for ind, pedi in enumerate(Pedlist):
                 if ind % 100 == 0:
                     print(ind, len(Pedlist))
@@ -151,6 +174,12 @@ class Trajectory_Dataloader():
     def get_data_index(self, data_dict, setname, ifshuffle=True):
         '''
         Get the dataset sampling index.
+
+        第一行 (frame_id_in_set)：包含了数据集中每个满足条件的帧号。
+        第二行 (set_id)：对应于每个帧号的数据子集（场景）的索引。
+            如果数据集中包含多个子数据集或场景，这一行指示每个帧号属于哪个子数据集。
+        第三行 (all_frame_id_list)：是一个连续的索引，
+            从 0 到 N-1，作为内部使用的序列号，有时用于后续操作中的随机打乱顺序。
         '''
         set_id = []
         frame_id_in_set = []
@@ -211,6 +240,7 @@ class Trajectory_Dataloader():
             shuffle = False
         else:
             shuffle = True
+        # The split of train/val, valbatch is empty dut to 0-value in val_fraction
         data_index = self.get_data_index(frameped_dict, setname, ifshuffle=shuffle)
         val_index = data_index[:, :int(data_index.shape[1] * val_fraction)]
         train_index = data_index[:, (int(data_index.shape[1] * val_fraction) + 1):]
@@ -245,19 +275,29 @@ class Trajectory_Dataloader():
             if i % 100 == 0:
                 print(i, '/', data_index.shape[1])
             cur_frame, cur_set, _ = data_index[:, i]
+            # 起始帧的行人IDs
             framestart_pedi = set(frameped_dict[cur_set][cur_frame])
             try:
+                # 结束帧的行人IDs
                 frameend_pedi = set(frameped_dict[cur_set][cur_frame + self.args.seq_length * skip[cur_set]])
             except:
                 continue
+            # 合并,并且当起始帧与结束帧的id完全不重合时，跳过本轮
             present_pedi = framestart_pedi | frameend_pedi
             if (framestart_pedi & frameend_pedi).__len__() == 0:
                 continue
             traject = ()
             IFfull = []
             for ped in present_pedi:
-                cur_trajec, iffull, ifexistobs = self.find_trajectory_fragment(pedtraject_dict[cur_set][ped], cur_frame,
-                                                                               self.args.seq_length, skip[cur_set])
+                # 为什么需要find_trajectory_fragment？
+                # 因为某个行人的起始帧早于目前区间或者结束帧晚于当前区间的情况
+                # 但我们只需要关注指定的固定的时间区间内行人轨迹
+                cur_trajec, iffull, ifexistobs = self.find_trajectory_fragment(pedtraject_dict[cur_set][ped], cur_frame,self.args.seq_length, skip[cur_set])
+                
+                # 在三种情况下放弃本个样本：
+                # - 行人出现时间太短，
+                # - 最后一帧中不存在轨迹数据，
+                # - 轨迹不存在                                                               
                 if len(cur_trajec) == 0:
                     continue
                 if ifexistobs == False:
@@ -266,7 +306,8 @@ class Trajectory_Dataloader():
                 if sum(cur_trajec[:, 0] > 0) < 5:
                     # filter trajectories have too few frame data
                     continue
-
+                # OLD cur_trajec [seq_length, 3 (frames, x, y)]
+                # NEO cur_trajec [seq_length, 2 (x, y)]
                 cur_trajec = (cur_trajec[:, 1:].reshape(-1, 1, 2),)
                 traject = traject.__add__(cur_trajec)
                 IFfull.append(iffull)
@@ -274,7 +315,9 @@ class Trajectory_Dataloader():
                 continue
             if sum(IFfull) < 1:
                 continue
+            # traject_batch.shape: [seq_length, # of peds in this time block, coordinate]
             traject_batch = np.concatenate(traject, 1)
+            # 本batch内行人数量
             batch_pednum = sum([i.shape[1] for i in batch_data]) + traject_batch.shape[1]
 
             cur_pednum = traject_batch.shape[1]
@@ -321,7 +364,10 @@ class Trajectory_Dataloader():
                 else:
                     batch_data.append(traject_batch)
                     Batch_id.append(batch_id)
-
+        # 在最后一个处理的帧 (last_frame) 之后，
+        # 如果还有剩余的数据（即没有被完全分配到之前的批次中），
+        # 并且这些剩余数据中包含的行人数 (batch_pednum) 大于 1，
+        # 那么将这些数据组织成一个新的批次，
         if last_frame < data_index.shape[1] - 1 and setname == 'test' and batch_pednum > 1:
             batch_data = self.massup_batch(batch_data)
             batch_data_mass.append((batch_data, Batch_id,))
@@ -340,6 +386,7 @@ class Trajectory_Dataloader():
         iffull = False
         ifexsitobs = False
 
+        # aligh起始以及结束index，因为会面临对于某个行人的起始帧早于目前区间或者结束帧晚于当前区间的情况，所以需要align。
         if start_n[0].shape[0] == 0 and end_n[0].shape[0] != 0:
             start_n = 0
             end_n = end_n[0][0]
@@ -377,6 +424,7 @@ class Trajectory_Dataloader():
         '''
         Massed up data fragements in different time window together to a batch
         '''
+        # batch_data: a list of [seq_length, # of peds in this time block, coordinate]
         num_Peds = 0
         for batch in batch_data:
             num_Peds += batch.shape[1]
@@ -402,11 +450,14 @@ class Trajectory_Dataloader():
         '''
         Get the sequence list (denoting where data exsist) and neighboring list (denoting where neighbors exsist).
         '''
+        # inputnodes shape [seq_length, # of peds in this time block, coordinate]
         num_Peds = inputnodes.shape[1]
 
         seq_list = np.zeros((inputnodes.shape[0], num_Peds))
         # denote where data not missing
-
+        # 其中 seq_length 是轨迹序列的长度（即帧数），
+        # num_peds 是在当前批次中的行人总数。
+        # seq_list 用于标记在每个时间步中，哪些行人的轨迹数据是存在的。
         for pedi in range(num_Peds):
             seq = inputnodes[:, pedi]
             seq_list[seq[:, 0] != 0, pedi] = 1
