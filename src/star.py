@@ -6,8 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .multi_attention_forward import multi_head_attention_forward
+from .mamba import MultiLayerMamba
 # torch.autograd.set_detect_anomaly(True)
-from mamba_ssm import Mamba
 
 def get_noise(shape, noise_type):
     if noise_type == "gaussian":
@@ -328,21 +328,9 @@ class STAR(torch.nn.Module):
             "pad_vocab_size_multiple": 8
         }
         """
-        self.temporal_encoder_1 = Mamba(
-            # This module uses roughly 3 * expand * d_model^2 parameters
-            d_model=16, # Model dimension d_model, 64 for Selective Copying, 
-            d_state=16,  # SSM state expansion factor
-            d_conv=4,    # Local convolution width
-            expand=2,    # Block expansion factor
-        )
-        
-        self.temporal_encoder_2 = Mamba(
-            # This module uses roughly 3 * expand * d_model^2 parameters
-            d_model=16, # Model dimension d_model, D
-            d_state=16,  # SSM state expansion factor
-            d_conv=4,    # Local convolution width
-            expand=2,    # Block expansion factor, E
-        )
+        # d_model = 64 for selective copying 
+        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 2)
+        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 2)
 
         # Linear layer to map input to embedding
         self.input_embedding_layer_temporal = nn.Linear(2, 32)
@@ -505,10 +493,9 @@ class STAR(torch.nn.Module):
             spatial_input_embedded = self.spatial_encoder_1(spatial_input_embedded_[-1].unsqueeze(1), nei_list)
             # spatial_input_embedded [N of Ped, Embedded Feature]
             spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)[-1]
-            # input of temporal_encoder_1 [T, N of Ped, 32-Embedded coorinate]
+            # input of temporal_encoder_1 [N of Ped, T, 32-Embedded coorinate]
             # output of temporal_encoder_1 [N of Ped, Embedded Feature]
-            temporal_input_embedded_last = self.temporal_encoder_1(temporal_input_embedded)[-1]
-
+            temporal_input_embedded_last = self.temporal_encoder_1(temporal_input_embedded.permute(1, 0, 2))[:, -1, :]
             temporal_input_embedded = temporal_input_embedded[:-1]
 
             # fusion [N of Ped, 2*Embedded Features]
@@ -521,7 +508,7 @@ class STAR(torch.nn.Module):
             # input of temporal_encoder_2 [(T-1) from GM + 1 from spatial = T, N of Ped, Embedded Features]
             temporal_input_embedded = torch.cat((temporal_input_embedded, spatial_input_embedded), dim=0)
             # output of temporal_encoder_2 [N of Ped, Embedded Features]
-            temporal_input_embedded = self.temporal_encoder_2(temporal_input_embedded)[-1]
+            temporal_input_embedded = self.temporal_encoder_2(temporal_input_embedded.permute(1, 0, 2))[:, -1, :]
             # add noise
             noise_to_cat = noise.repeat(temporal_input_embedded.shape[0], 1)
             temporal_input_embedded_wnoise = torch.cat((temporal_input_embedded, noise_to_cat), dim=1)
