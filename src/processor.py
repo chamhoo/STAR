@@ -14,6 +14,8 @@ class processor(object):
         self.args = args
         self.dataloader = Trajectory_Dataloader(args)
         self.net = STAR(args)
+        total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
+        print(f"Total number of parameters: {total_params}")
         self.set_optimizer()
         
         # if cuda
