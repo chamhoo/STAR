@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from .multi_attention_forward import multi_head_attention_forward
 # torch.autograd.set_detect_anomaly(True)
+from mamba_ssm import Mamba
 
 def get_noise(shape, noise_type):
     if noise_type == "gaussian":
@@ -304,7 +305,7 @@ class STAR(torch.nn.Module):
 
         self.temporal_encoder_layer = TransformerEncoderLayer(d_model=32, nhead=8)
 
-        emsize = 32  # embedding dimension
+        emsize = 32  # embedding dimension, 
         nhid = 2048  # the dimension of the feedforward network model in TransformerEncoder
         nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
         nhead = 8  # the number of heads in the multihead-attention models
@@ -313,8 +314,35 @@ class STAR(torch.nn.Module):
         self.spatial_encoder_1 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
         self.spatial_encoder_2 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
 
-        self.temporal_encoder_1 = TransformerEncoder(self.temporal_encoder_layer, 1)
-        self.temporal_encoder_2 = TransformerEncoder(self.temporal_encoder_layer, 1)
+        # self.temporal_encoder_1 = TransformerEncoder(self.temporal_encoder_layer, 1)
+        # self.temporal_encoder_2 = TransformerEncoder(self.temporal_encoder_layer, 1)
+        """
+        {
+            "d_model": 768,
+            "n_layer": 24,
+            "vocab_size": 50277,
+            "ssm_cfg": {},
+            "rms_norm": true,
+            "residual_in_fp32": true,
+            "fused_add_norm": true,
+            "pad_vocab_size_multiple": 8
+        }
+        """
+        self.temporal_encoder_1 = Mamba(
+            # This module uses roughly 3 * expand * d_model^2 parameters
+            d_model=16, # Model dimension d_model, 64 for Selective Copying, 
+            d_state=16,  # SSM state expansion factor
+            d_conv=4,    # Local convolution width
+            expand=2,    # Block expansion factor
+        )
+        
+        self.temporal_encoder_2 = Mamba(
+            # This module uses roughly 3 * expand * d_model^2 parameters
+            d_model=16, # Model dimension d_model, D
+            d_state=16,  # SSM state expansion factor
+            d_conv=4,    # Local convolution width
+            expand=2,    # Block expansion factor, E
+        )
 
         # Linear layer to map input to embedding
         self.input_embedding_layer_temporal = nn.Linear(2, 32)
