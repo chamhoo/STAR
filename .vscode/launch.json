@@ -4,13 +4,17 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        
+        
+
         {
             "name": "trainval",
             "type": "debugpy",
             "request": "launch",
             "program": "trainval.py",
             "console": "integratedTerminal",
-            "args": ["--test_set", "hotel", "--start_test", "50"]
+            "args": ["--test_set", "hotel", "--start_test", "50"],
+            "justMyCode": false,
         }
     ]
 }

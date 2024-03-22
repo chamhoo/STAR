@@ -329,8 +329,8 @@ class STAR(torch.nn.Module):
         }
         """
         # d_model = 64 for selective copying 
-        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 12)
-        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 12)
+        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 4)
+        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 4)
 
         # Linear layer to map input to embedding
         self.input_embedding_layer_temporal = nn.Linear(2, 32)
