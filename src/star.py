@@ -470,7 +470,7 @@ class STAR(torch.nn.Module):
             # spatial_input_embedded_ [T, N of Ped, Embedded Feature]
             emb_layer_spa = self.input_embedding_layer_spatial(node_abs)
             temporal_input_relu = torch.relu(emb_layer_spa)
-            spatial_input_embedded_ = self.dropout_in2(temporal_input_relu)
+            spatial_input_embedded_ = self.dropout_in2(temporal_input_relu)           
             # spatial transformer
             # input of spatial_encoder [N of Ped, 1, Embedded Feature]
             # output of spatial_encoder [N of Ped, 1, Embedded Feature]
