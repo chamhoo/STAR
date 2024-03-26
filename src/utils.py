@@ -243,7 +243,7 @@ class Trajectory_Dataloader():
         # The split of train/val, valbatch is empty dut to 0-value in val_fraction
         data_index = self.get_data_index(frameped_dict, setname, ifshuffle=shuffle)
         val_index = data_index[:, :int(data_index.shape[1] * val_fraction)]
-        train_index = data_index[:, (int(data_index.shape[1] * val_fraction) + 1):]
+        train_index = data_index[:, (int(data_index.shape[1] * val_fraction)):]
         trainbatch = self.get_seq_from_index_balance(frameped_dict, pedtraject_dict, train_index, setname)
         valbatch = self.get_seq_from_index_balance(frameped_dict, pedtraject_dict, val_index, setname)
         trainbatchnums = len(trainbatch)
@@ -279,7 +279,7 @@ class Trajectory_Dataloader():
             framestart_pedi = set(frameped_dict[cur_set][cur_frame])
             try:
                 # 结束帧的行人IDs
-                frameend_pedi = set(frameped_dict[cur_set][cur_frame + self.args.seq_length * skip[cur_set]])
+                frameend_pedi = set(frameped_dict[cur_set][cur_frame + (self.args.seq_length-1) * skip[cur_set]])
             except:
                 continue
             # 合并,并且当起始帧与结束帧的id完全不重合时，跳过本轮

@@ -4,6 +4,8 @@ import os
 
 import torch
 import yaml
+import numpy as np
+import random
 
 from src.processor import processor
 
@@ -11,7 +13,9 @@ from src.processor import processor
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(0)
-# torch.autograd.set_detect_anomaly(True)
+np.random.seed(0)
+random.seed(0)
+
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -36,7 +40,7 @@ def get_parser():
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--test_batch_size', default=4, type=int)
     parser.add_argument('--show_step', default=100, type=int)
-    parser.add_argument('--start_test', default=10, type=int)
+    parser.add_argument('--start_test', default=0, type=int)
     parser.add_argument('--sample_num', default=20, type=int)
     parser.add_argument('--num_epochs', default=300, type=int)
     parser.add_argument('--ifshow_detail', default=True, type=ast.literal_eval)

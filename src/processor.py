@@ -96,7 +96,7 @@ class processor(object):
                 str(epoch) + ',' + str(train_loss) + ',' + str(test_error) + ',' + str(test_final_error) + ',' + str(
                     self.args.learning_rate) + '\n')
 
-            if epoch % 10 == 0:
+            if epoch % 1 == 0:
                 self.log_file_curve.close()
                 self.log_file_curve = open(os.path.join(self.args.model_dir, 'log_curve.txt'), 'a+')
 
