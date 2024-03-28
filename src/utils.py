@@ -5,6 +5,10 @@ import time
 import numpy as np
 import torch
 
+torch.manual_seed(2333)
+np.random.seed(2333)
+random.seed(2333)
+
 DATASET_NAME_TO_NUM = {
     'eth': 0,
     'hotel': 1,
@@ -463,30 +467,32 @@ class Trajectory_Dataloader():
             seq_list[seq[:, 0] != 0, pedi] = 1
 
         # get relative cords, neighbor id list
-        nei_list = np.zeros((inputnodes.shape[0], num_Peds, num_Peds))
-        nei_num = np.zeros((inputnodes.shape[0], num_Peds))
-
+        nei_list = np.ones((inputnodes.shape[0], num_Peds, num_Peds), dtype=bool)
+        # nei_num = np.zeros((inputnodes.shape[0], num_Peds))
         # nei_list[f,i,j] denote if j is i's neighbors in frame f
         for pedi in range(num_Peds):
-            nei_list[:, pedi, :] = seq_list
-            nei_list[:, pedi, pedi] = 0  # person i is not the neighbor of itself
-            nei_num[:, pedi] = np.sum(nei_list[:, pedi, :], 1)
-            seqi = inputnodes[:, pedi]
-            for pedj in range(num_Peds):
-                seqj = inputnodes[:, pedj]
-                select = (seq_list[:, pedi] > 0) & (seq_list[:, pedj] > 0)
+            bool_seq  = seq_list.astype(bool)
+            nei_list[:, pedi, :] = nei_list[:, pedi, :] & bool_seq
+            nei_list[:, :, pedi] = nei_list[:, :, pedi] & bool_seq
+            nei_list[:, pedi, pedi] = False  # person i is not the neighbor of itself
+            # nei_num[:, pedi] = np.sum(nei_list[:, pedi, :], 1)
+            # seqi = inputnodes[:, pedi]
+            # for pedj in range(num_Peds):
+            #     seqj = inputnodes[:, pedj]
+            #     select = (seq_list[:, pedi] > 0) & (seq_list[:, pedj] > 0)
 
-                relative_cord = seqi[select, :2] - seqj[select, :2]
+            #     relative_cord = seqi[select, :2] - seqj[select, :2]
 
-                # invalid data index
-                select_dist = (abs(relative_cord[:, 0]) > self.args.neighbor_thred) | (
-                        abs(relative_cord[:, 1]) > self.args.neighbor_thred)
+            #     # invalid data index
+            #     select_dist = (abs(relative_cord[:, 0]) > self.args.neighbor_thred) | (
+            #             abs(relative_cord[:, 1]) > self.args.neighbor_thred)
 
-                nei_num[select, pedi] -= select_dist
+            #     nei_num[select, pedi] -= select_dist
 
-                select[select == True] = select_dist
-                nei_list[select, pedi, pedj] = 0
-        return seq_list, nei_list, nei_num
+            #     select[select == True] = select_dist
+            #     nei_list[select, pedi, pedj] = 0
+        nei_num = np.sum(nei_list, axis=1)
+        return seq_list, nei_list.astype(float), nei_num
 
     def rotate_shift_batch(self, batch_data, ifrotate=True):
         '''

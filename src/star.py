@@ -5,9 +5,54 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .multi_attention_forward import multi_head_attention_forward
 from .mamba import MultiLayerMamba
 # torch.autograd.set_detect_anomaly(True)
+
+
+def dfs(graph, start, visited=None):
+    if visited is None:
+        visited = set()
+    visited.add(start)
+    for next_node in range(len(graph[start])):
+        if graph[start][next_node] == 1 and next_node not in visited:
+            dfs(graph, next_node, visited)
+    return visited
+
+def find_connected_components(graph):
+    visited_nodes = set()
+    components = []
+    for start_node in range(len(graph)):
+        if start_node not in visited_nodes:
+            component = dfs(graph, start_node)
+            visited_nodes = visited_nodes.union(component)
+            components.append(list(component))
+    return components
+
+def gather_features(spatial_input_embedded, connected_components):
+    # 预先计算每个连通分量的大小
+    component_sizes = [len(comp) for comp in connected_components]
+    max_peds = max(component_sizes)
+    
+    # 扁平化连通分量索引列表以便一次性选取
+    # flat_indices = [index for comp in connected_components for index in comp]
+    # flat_indices_tensor = torch.tensor(flat_indices, device=spatial_input_embedded.device, dtype=torch.long)
+    
+    # # 使用torch.index_select一次性选取所有需要的embeddings
+    # selected_embeddings = torch.index_select(spatial_input_embedded, 0, flat_indices_tensor)
+    
+    # 初始化结果张量
+    N_of_scenes = len(connected_components)
+    Emb = spatial_input_embedded.size(1)
+    gathered_embeddings = torch.zeros(N_of_scenes, max_peds, Emb, device=spatial_input_embedded.device)
+    
+    # 填充结果张量
+    start_idx = 0
+    for i, size in enumerate(component_sizes):
+        end_idx = start_idx + size
+        gathered_embeddings[i, :size, :] = spatial_input_embedded[start_idx:end_idx]
+        start_idx = end_idx
+    
+    return gathered_embeddings, component_sizes
 
 def get_noise(shape, noise_type):
     if noise_type == "gaussian":
@@ -16,7 +61,6 @@ def get_noise(shape, noise_type):
         return torch.rand(*shape).sub(0.5).mul(2.0).cuda()
     raise ValueError('Unrecognized noise type "%s"' % noise_type)
 
-
 def get_subsequent_mask(seq):
     ''' For masking out the subsequent info. '''
     sz_b, len_s = seq.size()
@@ -24,273 +68,20 @@ def get_subsequent_mask(seq):
         torch.ones((1, len_s, len_s), device=seq.device), diagonal=1)).bool()
     return subsequent_mask
 
-
-def _get_activation_fn(activation):
-    if activation == "relu":
-        return F.relu
-    elif activation == "gelu":
-        return F.gelu
-    else:
-        raise RuntimeError("activation should be relu/gelu, not %s." % activation)
-
-
-def _get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
-
-
-class MultiheadAttention(nn.Module):
-    r"""Allows the model to jointly attend to information
-    from different representation subspaces.
-    See reference: Attention Is All You Need
-    .. math::
-        \text{MultiHead}(Q, K, V) = \text{Concat}(head_1,\dots,head_h)W^O
-        \text{where} head_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V)
-    Args:
-        embed_dim: total dimension of the model.
-        num_heads: parallel attention heads.
-        dropout: a Dropout layer on attn_output_weights. Default: 0.0.
-        bias: add bias as module parameter. Default: True.
-        add_bias_kv: add bias to the key and value sequences at dim=0.
-        add_zero_attn: add a new batch of zeros to the key and
-                       value sequences at dim=1.
-        kdim: total number of features in key. Default: None.
-        vdim: total number of features in key. Default: None.
-        Note: if kdim and vdim are None, they will be set to embed_dim such that
-        query, key, and value have the same number of features.
-    Examples::
-        >>> multihead_attn = nn.MultiheadAttention(embed_dim, num_heads)
-        >>> attn_output, attn_output_weights = multihead_attn(query, key, value)
+def slice_and_concat(emb_features, component_sizes):
     """
-    __constants__ = ['q_proj_weight', 'k_proj_weight', 'v_proj_weight', 'in_proj_weight']
-
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, kdim=None,
-                 vdim=None):
-        super(MultiheadAttention, self).__init__()
-        self.embed_dim = embed_dim
-        self.kdim = kdim if kdim is not None else embed_dim
-        self.vdim = vdim if vdim is not None else embed_dim
-        self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
-
-        self.num_heads = num_heads
-        self.dropout = dropout
-        self.head_dim = embed_dim // num_heads
-        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
-
-        if self._qkv_same_embed_dim is False:
-            self.q_proj_weight = nn.Parameter(torch.Tensor(embed_dim, embed_dim))
-            self.k_proj_weight = nn.Parameter(torch.Tensor(embed_dim, self.kdim))
-            self.v_proj_weight = nn.Parameter(torch.Tensor(embed_dim, self.vdim))
-            self.register_parameter('in_proj_weight', None)
-        else:
-            self.in_proj_weight = nn.Parameter(torch.empty(3 * embed_dim, embed_dim))
-            self.register_parameter('q_proj_weight', None)
-            self.register_parameter('k_proj_weight', None)
-            self.register_parameter('v_proj_weight', None)
-
-        if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim))
-        else:
-            self.register_parameter('in_proj_bias', None)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-
-        if add_bias_kv:
-            self.bias_k = nn.Parameter(torch.empty(1, 1, embed_dim))
-            self.bias_v = nn.Parameter(torch.empty(1, 1, embed_dim))
-        else:
-            self.bias_k = self.bias_v = None
-
-        self.add_zero_attn = add_zero_attn
-
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        if self._qkv_same_embed_dim:
-            nn.init.xavier_uniform_(self.in_proj_weight)
-        else:
-            nn.init.xavier_uniform_(self.q_proj_weight)
-            nn.init.xavier_uniform_(self.k_proj_weight)
-            nn.init.xavier_uniform_(self.v_proj_weight)
-
-        if self.in_proj_bias is not None:
-            nn.init.constant_(self.in_proj_bias, 0.)
-            nn.init.constant_(self.out_proj.bias, 0.)
-        if self.bias_k is not None:
-            nn.init.xavier_normal_(self.bias_k)
-        if self.bias_v is not None:
-            nn.init.xavier_normal_(self.bias_v)
-
-    def __setstate__(self, state):
-        # Support loading old MultiheadAttention checkpoints generated by v1.1.0
-        if '_qkv_same_embed_dim' not in state:
-            state['_qkv_same_embed_dim'] = True
-
-        super(MultiheadAttention, self).__setstate__(state)
-
-    def forward(self, query, key, value, key_padding_mask=None,
-                need_weights=True, attn_mask=None):
-        # type: (Tensor, Tensor, Tensor, Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Optional[Tensor]]
-        r"""
-    Args:
-        query, key, value: map a query and a set of key-value pairs to an output.
-            See "Attention Is All You Need" for more details.
-        key_padding_mask: if provided, specified padding elements in the key will
-            be ignored by the attention. This is an binary mask. When the value is True,
-            the corresponding value on the attention layer will be filled with -inf.
-        need_weights: output attn_output_weights.
-        attn_mask: mask that prevents attention to certain positions. This is an additive mask
-            (i.e. the values will be added to the attention layer).
-    Shape:
-        - Inputs:
-        - query: :math:`(L, N, E)` where L is the target sequence length, N is the batch size, E is
-          the embedding dimension.
-        - key: :math:`(S, N, E)`, where S is the source sequence length, N is the batch size, E is
-          the embedding dimension.
-        - value: :math:`(S, N, E)` where S is the source sequence length, N is the batch size, E is
-          the embedding dimension.
-        - key_padding_mask: :math:`(N, S)`, ByteTensor, where N is the batch size, S is the source sequence length.
-        - attn_mask: :math:`(L, S)` where L is the target sequence length, S is the source sequence length.
-        - Outputs:
-        - attn_output: :math:`(L, N, E)` where L is the target sequence length, N is the batch size,
-          E is the embedding dimension.
-        - attn_output_weights: :math:`(N, L, S)` where N is the batch size,
-          L is the target sequence length, S is the source sequence length.
-        """
-        if not self._qkv_same_embed_dim:
-            return multi_head_attention_forward(
-                query, key, value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask, need_weights=need_weights,
-                attn_mask=attn_mask, use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight)
-        else:
-            return multi_head_attention_forward(
-                query, key, value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask, need_weights=need_weights,
-                attn_mask=attn_mask)
-
-
-class TransformerEncoderLayer(nn.Module):
-
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0, activation="relu"):
-        super(TransformerEncoderLayer, self).__init__()
-        self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
-
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-
-        self.activation = _get_activation_fn(activation)
-
-    def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        r"""Pass the input through the encoder layer.
-
-        Args:
-            src: the sequnce to the encoder layer (required).
-            src_mask: the mask for the src sequence (optional).
-            src_key_padding_mask: the mask for the src keys per batch (optional).
-
-        Shape:
-            see the docs in Transformer class.
-        """
-        src2, attn = self.self_attn(src, src, src, attn_mask=src_mask,
-                                    key_padding_mask=src_key_padding_mask)
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-
-        if hasattr(self, "activation"):
-            src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
-        else:  # for backward compatibility
-            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src, attn
-
-
-class TransformerEncoder(nn.Module):
-    r"""TransformerEncoder is a stack of N encoder layers
-
-    Args:
-        encoder_layer: an instance of the TransformerEncoderLayer() class (required).
-        num_layers: the number of sub-encoder-layers in the encoder (required).
-        norm: the layer normalization component (optional).
-
-    Examples::
-        >>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
-        >>> transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-        >>> src = torch.rand(10, 32, 512)
-        >>> out = transformer_encoder(src)
+    高效地根据component_sizes对emb_features进行切片并拼接。
+    
+    参数:
+    - emb_features: 形状为[scenes, MAX N of peds in individual scene, Embedded Feature]的Tensor。
+    - component_sizes: 每个scene中有效pedestrians的数量列表。
+    
+    返回:
+    - output_tensor: 形状为[sum(component_sizes), Embedded Feature]的新Tensor。
     """
-
-    def __init__(self, encoder_layer, num_layers, norm=None):
-        super(TransformerEncoder, self).__init__()
-        self.layers = _get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        self.norm = norm
-
-    def forward(self, src, mask=None, src_key_padding_mask=None):
-        # input of temporal_encoder_1 [T, N of Ped, 32-Embedded coorinate]
-        r"""Pass the input through the encoder layers in turn.
-
-        Args:
-            src: the sequnce to the encoder (required).
-            mask: the mask for the src sequence (optional).
-            src_key_padding_mask: the mask for the src keys per batch (optional).
-
-        Shape:
-            see the docs in Transformer class.
-        """
-        output = src
-
-        atts = []
-
-        for i in range(self.num_layers):
-            output, attn = self.layers[i](output, src_mask=mask,
-                                          src_key_padding_mask=src_key_padding_mask)
-            atts.append(attn)
-        if self.norm:
-            output = self.norm(output)
-
-        return output
-
-
-class TransformerModel(nn.Module):
-
-    def __init__(self, ninp, nhead, nhid, nlayers, dropout=0.5):
-        super(TransformerModel, self).__init__()
-        self.model_type = 'Transformer'
-        self.src_mask = None
-        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.ninp = ninp
-
-    def forward(self, src, mask):
-        # input of spatial_encoder2 [N of Ped, 1, Embedded Feature]
-        # The first masked_fill sets positions with zeros in n_mask to a very large negative value (-1e20). 
-        # In the context of the softmax operation within the attention mechanism, 
-        # these large negative values will become zeros, 
-        # effectively blocking attention to these positions.
-        # 
-        # The second masked_fill ensures positions with ones in n_mask remain unchanged, 
-        # allowing attention to these positions.
-        n_mask = mask + torch.eye(mask.shape[0], mask.shape[0]).cuda()
-        n_mask = n_mask.float().masked_fill(n_mask == 0., float(-1e20)).masked_fill(n_mask == 1., float(0.0))
-        output = self.transformer_encoder(src, mask=n_mask)
-        return output
-
+    # 通过列表解析和torch.cat直接进行切片和拼接
+    output_tensor = torch.cat([emb_features[i, :size, :] for i, size in enumerate(component_sizes)], dim=0)
+    return output_tensor
 
 class STAR(torch.nn.Module):
 
@@ -303,34 +94,11 @@ class STAR(torch.nn.Module):
         self.dropout_prob = dropout_prob
         self.args = args
 
-        self.temporal_encoder_layer = TransformerEncoderLayer(d_model=32, nhead=8)
-
-        emsize = 32  # embedding dimension, 
-        nhid = 2048  # the dimension of the feedforward network model in TransformerEncoder
-        nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        nhead = 8  # the number of heads in the multihead-attention models
-        dropout = 0.1  # the dropout value
-
-        self.spatial_encoder_1 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-        self.spatial_encoder_2 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-
-        # self.temporal_encoder_1 = TransformerEncoder(self.temporal_encoder_layer, 1)
-        # self.temporal_encoder_2 = TransformerEncoder(self.temporal_encoder_layer, 1)
-        """
-        {
-            "d_model": 768,
-            "n_layer": 24,
-            "vocab_size": 50277,
-            "ssm_cfg": {},
-            "rms_norm": true,
-            "residual_in_fp32": true,
-            "fused_add_norm": true,
-            "pad_vocab_size_multiple": 8
-        }
-        """
+        self.spatial_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 4)
+        self.spatial_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 4)
         # d_model = 64 for selective copying 
-        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 4)
-        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 4)
+        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 2)
+        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 2)
 
         # Linear layer to map input to embedding
         self.input_embedding_layer_temporal = nn.Linear(2, 32)
@@ -460,15 +228,21 @@ class STAR(torch.nn.Module):
 
             else:
                 node_index = self.get_node_index(seq_list[:framenum + 1])
+                # netlist
+                # --------------------------------------
                 nei_list = nei_lists[framenum, node_index, :]
                 nei_list = nei_list[:, node_index]
+                graph = nei_list.cpu().numpy()
+                # 确定连通分量
+                connected_components = find_connected_components(graph)
+                # --------------------------------------
                 updated_batch_pednum = self.update_batch_pednum(batch_pednum, node_index)
                 st_ed = self.get_st_ed(updated_batch_pednum)
                 nodes_current = nodes_norm[:framenum + 1, node_index]
                 # We normalize the absolute coordinates using the mean value in the same scene
                 node_abs = self.mean_normalize_abs_input(nodes_abs[:framenum + 1, node_index], st_ed)
 
-            # Input Embedding
+            # Temporal Embedding ---------------------------------------------------
             # nodes_current [T, N of Ped, 2-coordinate] 
             # temporal_input_embedded [T, N of Ped, 32-Embedded coorinate] 
             emb_layer = self.input_embedding_layer_temporal(nodes_current)
@@ -482,17 +256,21 @@ class STAR(torch.nn.Module):
                 temporal_input_embedded_clone = temporal_input_embedded.clone()
                 temporal_input_embedded_clone[:framenum] = GM[:framenum, node_index]
                 temporal_input_embedded = temporal_input_embedded_clone
-            # sptial embedding
-            # spatial_input_embedded_ [T, N of Ped, Embedded Feature]
+            
+            # Sptial Embedding -----------------------------------------------------
+            # spatial_embedded1 [N of Ped, Embedded Feature]
             emb_layer_spa = self.input_embedding_layer_spatial(node_abs)
             temporal_input_relu = torch.relu(emb_layer_spa)
-            spatial_input_embedded_ = self.dropout_in2(temporal_input_relu)
-            # spatial transformer
-            # input of spatial_encoder [N of Ped, 1, Embedded Feature]
-            # output of spatial_encoder [N of Ped, 1, Embedded Feature]
-            spatial_input_embedded = self.spatial_encoder_1(spatial_input_embedded_[-1].unsqueeze(1), nei_list)
+            spatial_embedded1 = self.dropout_in2(temporal_input_relu)[-1]
+            # First Spatial -------------------------------------------------------
+            # gathered_features [N of scenes, N of peds in individual scene, Embedded Feature]
+            gathered_features, component_sizes = gather_features(spatial_embedded1, connected_components)
+            # output of spatial_encoder [N of scenes, N of peds in individual scene, Emb]
+            spatial1 = self.spatial_encoder_1(gathered_features)
+            # slice
             # spatial_input_embedded [N of Ped, Embedded Feature]
-            spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)[-1]
+            spatial_input_embedded = slice_and_concat(spatial1, component_sizes)
+            # First Temporal -------------------------------------------------------
             # input of temporal_encoder_1 [N of Ped, T, 32-Embedded coorinate]
             # output of temporal_encoder_1 [N of Ped, Embedded Feature]
             temporal_input_embedded_last = self.temporal_encoder_1(temporal_input_embedded.permute(1, 0, 2))[:, -1, :]
@@ -501,12 +279,18 @@ class STAR(torch.nn.Module):
             # fusion [N of Ped, 2*Embedded Features]
             fusion_feat = torch.cat((temporal_input_embedded_last, spatial_input_embedded), dim=1)
             fusion_feat = self.fusion_layer(fusion_feat)
-            # input of spatial_encoder2 [N of Ped, 1, Embedded Feature]
-            spatial_input_embedded = self.spatial_encoder_2(fusion_feat.unsqueeze(1), nei_list)
-            # spatial_input_embedded [1, N of Ped, Embedded Feature]
-            spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)
+
+            # Second Spatial -------------------------------------------------
+            # fusion_feat [N of Ped, Embedded Feature]
+            # gathered_fusion [N of scenes, MAX peds in this scene, Embedded Feature]
+            gathered_fusion, component_sizes = gather_features(fusion_feat, connected_components)
+            spatial2 = self.spatial_encoder_2(gathered_fusion)
+            # spatial_input_embedded [N of Ped, Embedded Feature]
+            spatial_embedded2 = slice_and_concat(spatial2, component_sizes)
+            spatial_embedded2 = torch.unsqueeze(spatial_embedded2, 0)
+            # Second Temporal -------------------------------------------------
             # input of temporal_encoder_2 [(T-1) from GM + 1 from spatial = T, N of Ped, Embedded Features]
-            temporal_input_embedded = torch.cat((temporal_input_embedded, spatial_input_embedded), dim=0)
+            temporal_input_embedded = torch.cat((temporal_input_embedded, spatial_embedded2), dim=0)
             # output of temporal_encoder_2 [N of Ped, Embedded Features]
             temporal_input_embedded = self.temporal_encoder_2(temporal_input_embedded.permute(1, 0, 2))[:, -1, :]
             # add noise

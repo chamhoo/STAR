@@ -7,6 +7,11 @@ from .utils import *
 from tqdm import tqdm
 # torch.autograd.set_detect_anomaly(True)
 
+torch.manual_seed(0)
+np.random.seed(0)
+random.seed(0)
+
+
 
 class processor(object):
     def __init__(self, args):
