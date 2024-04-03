@@ -85,28 +85,34 @@ def slice_and_concat(emb_features, component_sizes):
 
 class STAR(torch.nn.Module):
 
-    def __init__(self, args, dropout_prob=0):
+    def __init__(self, args, model_Hparameters, dropout_prob=0):
         super(STAR, self).__init__()
-
+        # model_Hparameters contains 3 Hyper-parameters:
+        #     - n_layers: # of layers in the temporal encoder
+        #     - ratio: The number of mambas used by the spatial layer is multiple times more than that used by the temporal layer
+        #     - embedding
         # set parameters for network architecture
-        self.embedding_size = [32]
+        self.emb = int(model_Hparameters["embedding"])
+        self.temp_layers = int(model_Hparameters["n_layers"])
+        self.spa_layers = int(self.temp_layers * model_Hparameters["ratio"])
+
         self.output_size = 2
         self.dropout_prob = dropout_prob
         self.args = args
 
-        self.spatial_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 4)
-        self.spatial_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 4)
+        self.spatial_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers)
+        self.spatial_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers)
         # d_model = 64 for selective copying 
-        self.temporal_encoder_1 = MultiLayerMamba(d_model=32, n_layer = 2)
-        self.temporal_encoder_2 = MultiLayerMamba(d_model=32, n_layer = 2)
+        self.temporal_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers)
+        self.temporal_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers)
 
         # Linear layer to map input to embedding
-        self.input_embedding_layer_temporal = nn.Linear(2, 32)
-        self.input_embedding_layer_spatial = nn.Linear(2, 32)
+        self.input_embedding_layer_temporal = nn.Linear(2, self.emb)
+        self.input_embedding_layer_spatial = nn.Linear(2, self.emb)
 
         # Linear layer to output and fusion
-        self.output_layer = nn.Linear(48, 2)
-        self.fusion_layer = nn.Linear(64, 32)
+        self.output_layer = nn.Linear(int(self.emb+16), 2)
+        self.fusion_layer = nn.Linear(int(self.emb*2), self.emb)
 
         # ReLU and dropout init
         self.relu = nn.ReLU()
@@ -202,7 +208,7 @@ class STAR(torch.nn.Module):
         # outputs  [bs, num of ped, 2]
         # GM       [bs, num of ped, 32 (embedding size)]
         outputs = torch.zeros(nodes_norm.shape[0], num_Ped, 2).cuda()
-        GM = torch.zeros(nodes_norm.shape[0], num_Ped, 32).cuda()
+        GM = torch.zeros(nodes_norm.shape[0], num_Ped, self.emb).cuda()
 
         noise = get_noise((1, 16), 'gaussian')
 

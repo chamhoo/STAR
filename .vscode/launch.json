@@ -13,7 +13,7 @@
             "request": "launch",
             "program": "trainval.py",
             "console": "integratedTerminal",
-            "args": ["--test_set", "hotel", "--start_test", "50"],
+            "args": ["--test_set", "hotel"],
             "justMyCode": false,
         }
     ]

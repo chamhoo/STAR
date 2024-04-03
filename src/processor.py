@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
+from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 from .star import STAR
 from .utils import *
 
+import json
 from tqdm import tqdm
 # torch.autograd.set_detect_anomaly(True)
 
@@ -14,16 +16,17 @@ random.seed(0)
 
 
 class processor(object):
-    def __init__(self, args):
+    def __init__(self, args, model_parameters):
         # initialization
         self.args = args
+        self.model_parameters = model_parameters
         self.dataloader = Trajectory_Dataloader(args)
-        self.net = STAR(args)
+        self.net = STAR(args, model_parameters)
         # eval parameters
         total_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
         print(f"Total number of parameters: {total_params}")
-        
         self.set_optimizer()
+        
         # if cuda
         if self.args.using_cuda:
             self.net = self.net.cuda()
@@ -41,10 +44,12 @@ class processor(object):
         self.best_ade = 100
         self.best_fde = 100
         self.best_epoch = -1
+        self.scheduler = None
 
-    def save_model(self, epoch):
 
-        model_path = self.args.save_dir + '/' + self.args.train_model + '/' + self.args.train_model + '_' + \
+    def save_model(self, epoch, train_loss):
+
+        model_path = self.args.save_dir + '/' + self.args.modelname + '/' + self.args.modelname + '_' + \
                      str(epoch) + '.tar'
         torch.save({
             'epoch': epoch,
@@ -52,39 +57,78 @@ class processor(object):
             'optimizer_state_dict': self.optimizer.state_dict()
         }, model_path)
 
-    def load_model(self):
 
-        if self.args.load_model is not None:
-            self.args.model_save_path = self.args.save_dir + '/' + self.args.train_model + '/' + self.args.train_model + '_' + \
-                                        str(self.args.load_model) + '.tar'
+    def load_model(self):
+        start_epoch = 0
+        if self.args.load_model_id is not None:
+            self.args.model_save_path = self.args.save_dir + '/' + self.args.modelname + '/' + self.args.modelname + '_' + \
+                                        str(self.args.load_model_id) + '.tar'
             print(self.args.model_save_path)
             if os.path.isfile(self.args.model_save_path):
                 print('Loading checkpoint')
                 checkpoint = torch.load(self.args.model_save_path)
                 model_epoch = checkpoint['epoch']
                 self.net.load_state_dict(checkpoint['state_dict'])
+                # 假设 optimizer 是你的优化器实例
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                # epoch and loss
+                start_epoch = model_epoch + 1
                 print('Loaded checkpoint at epoch', model_epoch)
+        return start_epoch
+
 
     def set_optimizer(self):
-
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.args.learning_rate)
+        lr = self.args.learning_rate
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
         self.criterion = nn.MSELoss(reduction='none')
 
-    def test(self):
 
+    def test(self):
         print('Testing begin')
         self.load_model()
         self.net.eval()
         test_error, test_final_error = self.test_epoch()
-        print('Set: {}, epoch: {},test_error: {} test_final_error: {}'.format(self.args.test_set,
-                                                                                          self.args.load_model,
-                                                                                       test_error, test_final_error))
-        
-    def train(self):
+        print("&&&&&&& Hyper Parameters &&&&&&&&&&&&")
+        for key, value in self.model_parameters.items():
+            print(f"{key}: {value}")
+        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+        print(f"Test Set: {self.args.test_set}")
+        print(f"ADE: {test_error}")
+        print(f"FDE: {test_final_error}")
 
-        print('Training begin')
+
+    def train(self):
+        print('Training begin ...')
+        print("&&&&&&& Hyper Parameters &&&&&&&&&&&&")
+        for key, value in self.model_parameters.items():
+            print(f"{key}: {value}")
+        print("")
+        print(f"scheduler method: {self.args.scheduler_method}")
+        print(f"lr: {self.args.learning_rate}")
+        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+
         test_error, test_final_error = 0, 0
-        for epoch in range(self.args.num_epochs):
+        start_epoch = self.load_model()
+        # 定义 LR
+        if self.args.scheduler_method == "OneCycleLR":
+            self.scheduler = OneCycleLR(
+                self.optimizer, 
+                max_lr=0.01, 
+                steps_per_epoch=self.dataloader.trainbatchnums, 
+                epochs=self.args.num_epochs - start_epoch
+                )
+            
+        elif self.args.scheduler_method == "ReduceLROnPlateau":
+            self.scheduler = ReduceLROnPlateau(
+                self.optimizer, 
+                mode='min', 
+                factor=0.1, 
+                patience=self.args.patience//2, 
+                )
+        else:
+            pass
+        
+        for epoch in range(start_epoch, self.args.num_epochs):
 
             self.net.train()
             train_loss = self.train_epoch(epoch)
@@ -92,10 +136,16 @@ class processor(object):
             if epoch >= self.args.start_test:
                 self.net.eval()
                 test_error, test_final_error = self.test_epoch()
+                # Best ADE & FDE
                 self.best_ade = test_error if test_final_error < self.best_fde else self.best_ade
-                self.best_epoch = epoch if test_final_error < self.best_fde else self.best_epoch
                 self.best_fde = test_final_error if test_final_error < self.best_fde else self.best_fde
-                self.save_model(epoch)
+                # if best epoch:
+                if (test_final_error <= self.best_fde) or (test_error <= self.best_ade):
+                    self.save_model(epoch, train_loss)
+                    self.best_epoch = epoch
+                else:
+                    if self.best_epoch + self.args.patience >= epoch:
+                        break
 
             self.log_file_curve.write(
                 str(epoch) + ',' + str(train_loss) + ',' + str(test_error) + ',' + str(test_final_error) + ',' + str(
@@ -105,14 +155,18 @@ class processor(object):
                 self.log_file_curve.close()
                 self.log_file_curve = open(os.path.join(self.args.model_dir, 'log_curve.txt'), 'a+')
 
+            current_lr = self.optimizer.param_groups[0]['lr']
             if epoch >= self.args.start_test:
                 print(
-                    '----epoch {}, train_loss={:.5f}, ADE={:.3f}, FDE={:.3f}, Best_ADE={:.3f}, Best_FDE={:.3f} at Epoch {}'
-                        .format(epoch, train_loss, test_error, test_final_error, self.best_ade, self.best_fde,
+                    '----epoch {}, lr={:.6f}, train_loss={:.5f}, ADE={:.3f}, FDE={:.3f}, Best_ADE={:.3f}, Best_FDE={:.3f} at Epoch {}'
+                        .format(epoch, current_lr, train_loss, test_error, test_final_error, self.best_ade, self.best_fde,
                                 self.best_epoch))
             else:
-                print('----epoch {}, train_loss={:.5f}'
-                      .format(epoch, train_loss))
+                print('----epoch {}, train_loss={:.5f}, lr={:.6f}'
+                      .format(epoch, train_loss, current_lr))
+            # 更新学习率
+            if self.args.scheduler_method == "ReduceLROnPlateau":
+                self.scheduler.step(test_final_error)
 
     def train_epoch(self, epoch):
 
@@ -120,7 +174,7 @@ class processor(object):
         loss_epoch = 0
 
         for batch in range(self.dataloader.trainbatchnums):
-
+            # self.optimizer.zero_grad()
             start = time.time()
             inputs, batch_id = self.dataloader.get_train_batch(batch)
             inputs = tuple([torch.Tensor(i) for i in inputs])
@@ -147,7 +201,8 @@ class processor(object):
             self.optimizer.step()
 
             end = time.time()
-
+            if self.args.scheduler_method == "OneCycleLR":
+                self.scheduler.step()
             if batch % self.args.show_step == 0 and self.args.ifshow_detail:
                 print(
                     'train-{}/{} (epoch {}), train_loss = {:.5f}, time/batch = {:.5f} '.format(batch,
