@@ -144,7 +144,7 @@ class processor(object):
                     self.save_model(epoch, train_loss)
                     self.best_epoch = epoch
                 else:
-                    if self.best_epoch + self.args.patience >= epoch:
+                    if self.best_epoch + self.args.patience < epoch:
                         break
 
             self.log_file_curve.write(
