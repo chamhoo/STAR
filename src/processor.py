@@ -176,13 +176,17 @@ class processor(object):
         for batch in range(self.dataloader.trainbatchnums):
             # self.optimizer.zero_grad()
             start = time.time()
-            inputs, batch_id = self.dataloader.get_train_batch(batch)
-            inputs = tuple([torch.Tensor(i) for i in inputs])
-            inputs = tuple([i.cuda() for i in inputs])
-
+            inputs_ori, batch_id = self.dataloader.get_train_batch(batch)
+            inputs = []
+            for idx, contents in enumerate(inputs_ori):
+                if idx != len(inputs_ori) - 2:
+                    contents = torch.Tensor(contents).cuda()
+                inputs.append(contents)
+            # inputs = tuple([torch.Tensor(i) for i in inputs])
+            # inputs = tuple([i.cuda() for i in inputs])
             loss = torch.zeros(1).cuda()
-            batch_abs, batch_norm, shift_value, seq_list, nei_list, nei_num, batch_pednum = inputs
-            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], nei_list[:-1], nei_num[:-1], batch_pednum
+            batch_abs, batch_norm, shift_value, seq_list, scenes, batch_pednum = inputs
+            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], scenes, batch_pednum
 
             self.net.zero_grad()
 
@@ -219,18 +223,20 @@ class processor(object):
         error_epoch, final_error_epoch = 0, 0,
         error_cnt_epoch, final_error_cnt_epoch = 1e-5, 1e-5
 
-        for batch in tqdm(range(self.dataloader.testbatchnums)):
+        for batch in range(self.dataloader.testbatchnums):
 
-            inputs, batch_id = self.dataloader.get_test_batch(batch)
-            inputs = tuple([torch.Tensor(i) for i in inputs])
+            inputs_ori, batch_id = self.dataloader.get_test_batch(batch)
+            inputs = []
+            for idx, contents in enumerate(inputs_ori):
+                if idx != len(inputs_ori) - 2:
+                    contents = torch.Tensor(contents)
+                    if self.args.using_cuda:
+                        contents = contents.cuda()
+                inputs.append(contents)
 
-            if self.args.using_cuda:
-                inputs = tuple([i.cuda() for i in inputs])
+            batch_abs, batch_norm, shift_value, seq_list, scenes, batch_pednum = inputs
 
-            batch_abs, batch_norm, shift_value, seq_list, nei_list, nei_num, batch_pednum = inputs
-
-            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], nei_list[:-1], nei_num[
-                                                                                                              :-1], batch_pednum
+            inputs_forward = batch_abs[:-1], batch_norm[:-1], shift_value[:-1], seq_list[:-1], scenes, batch_pednum
 
             all_output = []
             for i in range(self.args.sample_num):

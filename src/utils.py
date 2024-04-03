@@ -435,46 +435,58 @@ class Trajectory_Dataloader():
 
         seq_list_b = np.zeros((self.args.seq_length, 0))
         nodes_batch_b = np.zeros((self.args.seq_length, 0, 2))
-        nei_list_b = np.zeros((self.args.seq_length, num_Peds, num_Peds))
-        nei_num_b = np.zeros((self.args.seq_length, num_Peds))
         num_Ped_h = 0
+        scenes = []
         batch_pednum = []
         for batch in batch_data:
             num_Ped = batch.shape[1]
-            seq_list, nei_list, nei_num = self.get_social_inputs_numpy(batch)
+            seq_list = self.get_seq_list(batch)
             nodes_batch_b = np.append(nodes_batch_b, batch, 1)
             seq_list_b = np.append(seq_list_b, seq_list, 1)
-            nei_list_b[:, num_Ped_h:num_Ped_h + num_Ped, num_Ped_h:num_Ped_h + num_Ped] = nei_list
-            nei_num_b[:, num_Ped_h:num_Ped_h + num_Ped] = nei_num
+            scenes.append((num_Ped_h, num_Ped_h + num_Ped - 1))
             batch_pednum.append(num_Ped)
             num_Ped_h += num_Ped
-        return (nodes_batch_b, seq_list_b, nei_list_b, nei_num_b, batch_pednum)
+        return (nodes_batch_b, seq_list_b, scenes, batch_pednum)
+    
 
-    def get_social_inputs_numpy(self, inputnodes):
-        '''
-        Get the sequence list (denoting where data exsist) and neighboring list (denoting where neighbors exsist).
-        '''
+    def get_seq_list(self, inputnodes):
         # inputnodes shape [seq_length, # of peds in this time block, coordinate]
-        num_Peds = inputnodes.shape[1]
-
-        seq_list = np.zeros((inputnodes.shape[0], num_Peds))
-        # denote where data not missing
         # 其中 seq_length 是轨迹序列的长度（即帧数），
         # num_peds 是在当前批次中的行人总数。
         # seq_list 用于标记在每个时间步中，哪些行人的轨迹数据是存在的。
+        seq_length, num_Peds, _ = inputnodes.shape
+        seq_list = np.zeros((seq_length, num_Peds))
         for pedi in range(num_Peds):
             seq = inputnodes[:, pedi]
             seq_list[seq[:, 0] != 0, pedi] = 1
+        return seq_list
+
+
+    # def get_social_inputs_numpy(self, inputnodes):
+    #     '''
+    #     Get the sequence list (denoting where data exsist) and neighboring list (denoting where neighbors exsist).
+    #     '''
+    #     # inputnodes shape [seq_length, # of peds in this time block, coordinate]
+    #     num_Peds = inputnodes.shape[1]
+
+    #     seq_list = np.zeros((inputnodes.shape[0], num_Peds))
+    #     # denote where data not missing
+    #     # 其中 seq_length 是轨迹序列的长度（即帧数），
+    #     # num_peds 是在当前批次中的行人总数。
+    #     # seq_list 用于标记在每个时间步中，哪些行人的轨迹数据是存在的。
+    #     for pedi in range(num_Peds):
+    #         seq = inputnodes[:, pedi]
+    #         seq_list[seq[:, 0] != 0, pedi] = 1
 
         # get relative cords, neighbor id list
-        nei_list = np.ones((inputnodes.shape[0], num_Peds, num_Peds), dtype=bool)
+        # nei_list = np.ones((inputnodes.shape[0], num_Peds, num_Peds), dtype=bool)
         # nei_num = np.zeros((inputnodes.shape[0], num_Peds))
         # nei_list[f,i,j] denote if j is i's neighbors in frame f
-        for pedi in range(num_Peds):
-            bool_seq  = seq_list.astype(bool)
-            nei_list[:, pedi, :] = nei_list[:, pedi, :] & bool_seq
-            nei_list[:, :, pedi] = nei_list[:, :, pedi] & bool_seq
-            nei_list[:, pedi, pedi] = False  # person i is not the neighbor of itself
+        # for pedi in range(num_Peds):
+        #     bool_seq  = seq_list.astype(bool)
+        #     nei_list[:, pedi, :] = nei_list[:, pedi, :] & bool_seq
+        #     nei_list[:, :, pedi] = nei_list[:, :, pedi] & bool_seq
+            # nei_list[:, pedi, pedi] = False  # person i is not the neighbor of itself
             # nei_num[:, pedi] = np.sum(nei_list[:, pedi, :], 1)
             # seqi = inputnodes[:, pedi]
             # for pedj in range(num_Peds):
@@ -491,14 +503,14 @@ class Trajectory_Dataloader():
 
             #     select[select == True] = select_dist
             #     nei_list[select, pedi, pedj] = 0
-        nei_num = np.sum(nei_list, axis=1)
-        return seq_list, nei_list.astype(float), nei_num
+        # nei_num = np.sum(nei_list, axis=1)
+        # return seq_list, nei_list.astype(float), nei_num
 
     def rotate_shift_batch(self, batch_data, ifrotate=True):
         '''
         Random ration and zero shifting.
         '''
-        batch, seq_list, nei_list, nei_num, batch_pednum = batch_data
+        batch, seq_list, scenes, batch_pednum = batch_data
 
         # rotate batch
         if ifrotate:
@@ -511,7 +523,7 @@ class Trajectory_Dataloader():
 
         shift_value = np.repeat(s.reshape((1, -1, 2)), self.args.seq_length, 0)
 
-        batch_data = batch, batch - shift_value, shift_value, seq_list, nei_list, nei_num, batch_pednum
+        batch_data = batch, batch - shift_value, shift_value, seq_list, scenes, batch_pednum
         return batch_data
 
     def get_train_batch(self, idx):

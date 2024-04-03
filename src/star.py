@@ -9,41 +9,11 @@ from .mamba import MultiLayerMamba
 # torch.autograd.set_detect_anomaly(True)
 
 
-def dfs(graph, start, visited=None):
-    if visited is None:
-        visited = set()
-    visited.add(start)
-    for next_node in range(len(graph[start])):
-        if graph[start][next_node] == 1 and next_node not in visited:
-            dfs(graph, next_node, visited)
-    return visited
-
-def find_connected_components(graph):
-    visited_nodes = set()
-    components = []
-    for start_node in range(len(graph)):
-        if start_node not in visited_nodes:
-            component = dfs(graph, start_node)
-            visited_nodes = visited_nodes.union(component)
-            components.append(list(component))
-    return components
-
-def gather_features(spatial_input_embedded, connected_components):
-    # 预先计算每个连通分量的大小
-    component_sizes = [len(comp) for comp in connected_components]
+def gather_features(spatial_input_embedded, component_sizes, num_emb):
     max_peds = max(component_sizes)
-    
-    # 扁平化连通分量索引列表以便一次性选取
-    # flat_indices = [index for comp in connected_components for index in comp]
-    # flat_indices_tensor = torch.tensor(flat_indices, device=spatial_input_embedded.device, dtype=torch.long)
-    
-    # # 使用torch.index_select一次性选取所有需要的embeddings
-    # selected_embeddings = torch.index_select(spatial_input_embedded, 0, flat_indices_tensor)
-    
     # 初始化结果张量
-    N_of_scenes = len(connected_components)
-    Emb = spatial_input_embedded.size(1)
-    gathered_embeddings = torch.zeros(N_of_scenes, max_peds, Emb, device=spatial_input_embedded.device)
+    N_of_scenes = len(component_sizes)
+    gathered_embeddings = torch.zeros(N_of_scenes, max_peds, num_emb, device=spatial_input_embedded.device)
     
     # 填充结果张量
     start_idx = 0
@@ -52,7 +22,7 @@ def gather_features(spatial_input_embedded, connected_components):
         gathered_embeddings[i, :size, :] = spatial_input_embedded[start_idx:end_idx]
         start_idx = end_idx
     
-    return gathered_embeddings, component_sizes
+    return gathered_embeddings
 
 def get_noise(shape, noise_type):
     if noise_type == "gaussian":
@@ -201,7 +171,8 @@ class STAR(torch.nn.Module):
 
     def forward(self, inputs, iftest=False):
         # Unpack inputs tuple into respective variables
-        nodes_abs, nodes_norm, shift_value, seq_list, nei_lists, nei_num, batch_pednum = inputs
+        # nodes_abs, nodes_norm, shift_value, seq_list, nei_lists, nei_num, batch_pednum = inputs
+        nodes_abs, nodes_norm, shift_value, seq_list, scenes, batch_pednum = inputs
         num_Ped = nodes_norm.shape[1]
         # initializing outputs and GM
         # bs: 19 as default
@@ -236,11 +207,13 @@ class STAR(torch.nn.Module):
                 node_index = self.get_node_index(seq_list[:framenum + 1])
                 # netlist
                 # --------------------------------------
-                nei_list = nei_lists[framenum, node_index, :]
-                nei_list = nei_list[:, node_index]
-                graph = nei_list.cpu().numpy()
-                # 确定连通分量
-                connected_components = find_connected_components(graph)
+                component_sizes = []
+                # 遍历每个场景
+                for start, end in scenes:
+                    # 获取当前场景中所有行人的在场情况
+                    current_scene_presence = node_index[start:end+1]
+                    # 计算并存储当前场景中在场行人的数量
+                    component_sizes.append(current_scene_presence.sum().item())
                 # --------------------------------------
                 updated_batch_pednum = self.update_batch_pednum(batch_pednum, node_index)
                 st_ed = self.get_st_ed(updated_batch_pednum)
@@ -266,11 +239,11 @@ class STAR(torch.nn.Module):
             # Sptial Embedding -----------------------------------------------------
             # spatial_embedded1 [N of Ped, Embedded Feature]
             emb_layer_spa = self.input_embedding_layer_spatial(node_abs)
-            temporal_input_relu = torch.relu(emb_layer_spa)
-            spatial_embedded1 = self.dropout_in2(temporal_input_relu)[-1]
+            spa_input_relu = torch.relu(emb_layer_spa)
+            spatial_embedded1 = self.dropout_in2(spa_input_relu)[-1]
             # First Spatial -------------------------------------------------------
             # gathered_features [N of scenes, N of peds in individual scene, Embedded Feature]
-            gathered_features, component_sizes = gather_features(spatial_embedded1, connected_components)
+            gathered_features = gather_features(spatial_embedded1, component_sizes, self.emb)
             # output of spatial_encoder [N of scenes, N of peds in individual scene, Emb]
             spatial1 = self.spatial_encoder_1(gathered_features)
             # slice
@@ -289,7 +262,7 @@ class STAR(torch.nn.Module):
             # Second Spatial -------------------------------------------------
             # fusion_feat [N of Ped, Embedded Feature]
             # gathered_fusion [N of scenes, MAX peds in this scene, Embedded Feature]
-            gathered_fusion, component_sizes = gather_features(fusion_feat, connected_components)
+            gathered_fusion = gather_features(fusion_feat, component_sizes, self.emb)
             spatial2 = self.spatial_encoder_2(gathered_fusion)
             # spatial_input_embedded [N of Ped, Embedded Feature]
             spatial_embedded2 = slice_and_concat(spatial2, component_sizes)
