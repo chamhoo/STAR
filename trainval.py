@@ -95,8 +95,8 @@ if __name__ == '__main__':
     parser = get_parser()
     p = parser.parse_args()
 
-    p.save_dir = p.save_base_dir + str(p.test_set) + '/'
-    p.model_dir = p.save_base_dir + str(p.test_set) + '/' + p.modelname + '/'
+    p.save_dir = p.save_base_dir + '/' + str(p.test_set) + '/'
+    p.model_dir = p.save_base_dir + '/' + str(p.test_set) + '/' + p.modelname + '/'
     p.config = p.model_dir + '/config_' + p.phase + '.yaml'
 
     if not load_arg(p):
