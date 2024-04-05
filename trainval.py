@@ -27,7 +27,7 @@ def get_parser():
     parser.add_argument('--save_base_dir', default='./output/', help='Directory for saving caches and models.')
     parser.add_argument('--modelname', default='star', help='Your model name')
     parser.add_argument('--load_model_id', default=None, type=str, help="load pretrained model for test or training")
-    parser.add_argument('--test_set', default='eth', type=str,
+    parser.add_argument('--test_set', default='hotel', type=str,
                         help='Set this value to [eth, hotel, zara1, zara2, univ] for ETH-univ, ETH-hotel, UCY-zara01, UCY-zara02, UCY-univ') 
 
     # Training arguments  --------------------------------------
