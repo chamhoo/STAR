@@ -55,7 +55,7 @@ def get_parser():
     parser.add_argument('--start_test', default=0, type=int)
     parser.add_argument('--sample_num', default=20, type=int)
     
-    parser.add_argument('--ifshow_detail', default=True, type=ast.literal_eval)
+    parser.add_argument('--ifshow_detail', default=False, type=ast.literal_eval)
     parser.add_argument('--randomRotate', default=True, type=ast.literal_eval,
                         help="=True:random rotation of each trajectory fragment")
     parser.add_argument('--clip', default=1, type=int)
