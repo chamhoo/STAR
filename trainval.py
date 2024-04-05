@@ -32,7 +32,7 @@ def get_parser():
 
     # Training arguments  --------------------------------------
     parser.add_argument('--patience', default=10, type=int)
-    parser.add_argument('--scheduler_method', default="ReduceLROnPlateau", type=str, help="OneCycleLR/ReduceLROnPlateau")
+    parser.add_argument('--scheduler_method', default="None", type=str, help="OneCycleLR/ReduceLROnPlateau/None")
     parser.add_argument('--learning_rate', default=0.001, type=float)
     parser.add_argument('--early_stopping', default=True, type=bool)
     parser.add_argument('--num_epochs', default=50, type=int)
@@ -113,7 +113,8 @@ if __name__ == '__main__':
     model_Hparameters = {
         "n_layers": 8,
         "ratio": 1,
-        "embedding": 64
+        "embedding": 64,
+        "dropout": 0
     }
     trainer = processor(args, model_parameters=model_Hparameters)
 

@@ -55,7 +55,7 @@ def slice_and_concat(emb_features, component_sizes):
 
 class STAR(torch.nn.Module):
 
-    def __init__(self, args, model_Hparameters, dropout_prob=0):
+    def __init__(self, args, model_Hparameters):
         super(STAR, self).__init__()
         # model_Hparameters contains 3 Hyper-parameters:
         #     - n_layers: # of layers in the temporal encoder
@@ -67,7 +67,7 @@ class STAR(torch.nn.Module):
         self.spa_layers = int(self.temp_layers * model_Hparameters["ratio"])
 
         self.output_size = 2
-        self.dropout_prob = dropout_prob
+        self.dropout_prob = model_Hparameters["dropout"]
         self.args = args
 
         self.spatial_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers)

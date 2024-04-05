@@ -98,13 +98,23 @@ class processor(object):
 
 
     def train(self):
+        # scheduler_method 
+        # batch_around_ped 
+        # num_epochs 
+        # test_set 
+        # learning_rate 
+        # early_stopping 
         print('Training begin ...')
         print("&&&&&&& Hyper Parameters &&&&&&&&&&&&")
         for key, value in self.model_parameters.items():
             print(f"{key}: {value}")
         print("")
-        print(f"scheduler method: {self.args.scheduler_method}")
-        print(f"lr: {self.args.learning_rate}")
+        print(f"Scheduler Method: {self.args.scheduler_method}")
+        print(f"batch_around_ped: {self.args.num_epochs}")
+        print(f"# of epochs: {self.args.learning_rate}")
+        print(f"Test Set: {self.args.test_set}")
+        print(f"Learning Rate: {self.args.learning_rate}")
+        print(f"Early Stopping: {self.args.early_stopping }")
         print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
 
         test_error, test_final_error = 0, 0
