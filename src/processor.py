@@ -114,7 +114,8 @@ class processor(object):
         print(f"# of epochs: {self.args.num_epochs}")
         print(f"Test Set: {self.args.test_set}")
         print(f"Learning Rate: {self.args.learning_rate}")
-        print(f"Early Stopping: {self.args.early_stopping }")
+        print(f"Early Stopping: {self.args.early_stop}")
+        print(f"Model Name: {self.args.modelname}")
         print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
 
         test_error, test_final_error = 0, 0
