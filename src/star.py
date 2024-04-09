@@ -70,11 +70,11 @@ class STAR(torch.nn.Module):
         self.dropout_prob = model_Hparameters["dropout"]
         self.args = args
 
-        self.spatial_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers)
-        self.spatial_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers)
+        self.spatial_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers, bi=True)
+        self.spatial_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.spa_layers, bi=True)
         # d_model = 64 for selective copying 
-        self.temporal_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers)
-        self.temporal_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers)
+        self.temporal_encoder_1 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers, bi=False)
+        self.temporal_encoder_2 = MultiLayerMamba(d_model=self.emb, n_layer = self.temp_layers, bi=False)
 
         # Linear layer to map input to embedding
         self.input_embedding_layer_temporal = nn.Linear(2, self.emb)

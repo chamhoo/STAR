@@ -183,10 +183,12 @@ class processor(object):
 
         self.dataloader.reset_batch_pointer(set='train', valid=False)
         loss_epoch = 0
+        # 初始化进度条
+        pbar = tqdm(total=self.dataloader.trainbatchnums, leave=False)
 
         for batch in range(self.dataloader.trainbatchnums):
             # self.optimizer.zero_grad()
-            start = time.time()
+            # start = time.time()
             inputs_ori, batch_id = self.dataloader.get_train_batch(batch)
             inputs = []
             for idx, contents in enumerate(inputs_ori):
@@ -215,16 +217,19 @@ class processor(object):
 
             self.optimizer.step()
 
-            end = time.time()
+            # end = time.time()
             if self.args.scheduler_method == "OneCycleLR":
                 self.scheduler.step()
-            if batch % self.args.show_step == 0 and self.args.ifshow_detail:
-                print(
-                    'train-{}/{} (epoch {}), train_loss = {:.5f}, time/batch = {:.5f} '.format(batch,
-                                                                                               self.dataloader.trainbatchnums,
-                                                                                               epoch, loss.item(),
-                                                                                               end - start))
-
+            # if batch % self.args.show_step == 0 and self.args.ifshow_detail:
+            #     print(
+            #         'train-{}/{} (epoch {}), train_loss = {:.5f}, time/batch = {:.5f} '.format(batch,
+            #                                                                                    self.dataloader.trainbatchnums,
+            #                                                                                    epoch, loss.item(),
+            #                                                                                    end - start))
+            # 更新进度条并显示当前batch的loss
+            pbar.set_description(f"Loss: {loss.item():.4f}")
+            pbar.update(1)
+        pbar.close()
         train_loss_epoch = loss_epoch / self.dataloader.trainbatchnums
         return train_loss_epoch
 

@@ -54,14 +54,19 @@ class MultiLayerMamba(nn.Module):
         self,
         d_model: int,
         n_layer: int = 2,
-        rms_norm: bool = False
+        rms_norm: bool = False,
+        bi: bool = False,
     ):
         # init
         super().__init__()
 
         def create_block():
             norm_cls = partial(nn.LayerNorm if not rms_norm else RMSNorm, eps=1e-5)
-            block = Block(d_model, Mamba, norm_cls=norm_cls)
+            if bi:
+                MambaV2 = partial(Mamba, bimamba_type="v2")
+                block = Block(d_model, MambaV2, norm_cls=norm_cls)
+            else:
+                block = Block(d_model, Mamba, norm_cls=norm_cls)
             return block
 
         self.layers = nn.ModuleList([create_block() for _ in range(n_layer)])
