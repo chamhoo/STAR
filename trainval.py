@@ -113,7 +113,7 @@ if __name__ == '__main__':
     model_Hparameters = {
         "n_layers": 1,
         "ratio": 1,
-        "embedding": 256,
+        "embedding": 128,
         "dropout": 0
     }
     trainer = processor(args, model_parameters=model_Hparameters)

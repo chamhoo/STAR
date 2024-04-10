@@ -213,6 +213,7 @@ class Mamba(nn.Module):
                 )    
             elif self.bimamba_type == "v2":
                 A_b = -torch.exp(self.A_b_log.float())
+                # x, z = xz.chunk(2, dim=1)
                 out = mamba_inner_fn_no_out_proj(
                     xz,
                     self.conv1d.weight,
@@ -226,6 +227,7 @@ class Mamba(nn.Module):
                     delta_bias=self.dt_proj.bias.float(),
                     delta_softplus=True,
                 )
+                # flip x
                 out_b = mamba_inner_fn_no_out_proj(
                     xz.flip([-1]),
                     self.conv1d_b.weight,
