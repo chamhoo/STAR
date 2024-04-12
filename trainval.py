@@ -111,7 +111,7 @@ if __name__ == '__main__':
     #     - ratio: The number of mambas used by the spatial layer is multiple times more than that used by the temporal layer
     #     - embedding
     model_Hparameters = {
-        "n_layers": 1,
+        "n_layers": 2,
         "ratio": 1,
         "embedding": 128,
         "dropout": 0
